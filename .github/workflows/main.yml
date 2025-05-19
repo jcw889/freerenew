@@ -1,0 +1,31 @@
+name: FreeCloud自动续期    
+
+on:
+  schedule:
+    - cron: '30 0 */2 * *'  # 每2天的UTC时间0:30（对应北京时间8:30）
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install cloudscraper requests
+
+      - name: Run renew script
+        env:
+          FC_USERNAME: ${{ secrets.FC_USERNAME }}
+          FC_PASSWORD: ${{ secrets.FC_PASSWORD }}
+          FC_MACHINE_ID: ${{ secrets.FC_MACHINE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 main.py
