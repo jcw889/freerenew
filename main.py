@@ -7,11 +7,11 @@ import requests
 #   TELEGRAM_BOT_TOKEN：你的Bot Token
 #   TELEGRAM_CHAT_ID：你的聊天ID
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")   # TG机器人token 
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")       # 用户ID或频道、群ID                                                 
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")   # TG机器人token
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")       # 用户ID或频道、群ID                                                   
 
 # 其他凭证（环境变量）
-USERNAME = os.getenv("FC_USERNAME")      # 用户名                        
+USERNAME = os.getenv("FC_USERNAME")      # 用户名                          
 PASSWORD = os.getenv("FC_PASSWORD")      # 密码                    
 MACHINE_ID = os.getenv("FC_MACHINE_ID")  # 服务器编号                                
 
