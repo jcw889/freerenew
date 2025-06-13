@@ -155,31 +155,90 @@ jobs:
           RANDOM_INDEX=$((RANDOM % ${#USER_AGENTS[@]}))
           RANDOM_UA="${USER_AGENTS[$RANDOM_INDEX]}"
           
+          # 增加额外的HTTP头以更像真实浏览器
+          ACCEPT_HEADER="text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+          ACCEPT_LANGUAGE="zh-CN,zh;q=0.9,en;q=0.8"
+          ACCEPT_ENCODING="gzip, deflate, br"
+          
           # 创建一个包含所有cookie的临时文件
           COOKIE_JAR="cookies.txt"
           
-          # 首先访问首页获取初始cookie
-          echo "访问首页获取初始cookie..."
-          curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/" > /dev/null
-          sleep 2
+          # 首先访问首页获取初始cookie和CSRF令牌
+          echo "访问首页获取初始cookie和CSRF令牌..."
+          HOME_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
+            -H "Upgrade-Insecure-Requests: 1" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: none" \
+            -H "Sec-Fetch-User: ?1" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/")
+          
+          # 提取CSRF令牌
+          CSRF_TOKEN=$(echo "$HOME_PAGE" | grep -o 'name="_token" value="[^"]*"' | sed 's/name="_token" value="//g' | sed 's/"//g' || echo "")
+          if [ -n "$CSRF_TOKEN" ]; then
+            echo "找到CSRF令牌: ${CSRF_TOKEN:0:10}..."
+          else
+            echo "未找到CSRF令牌，继续尝试..."
+          fi
+          
+          # 模拟人类行为：随机停顿
+          SLEEP_TIME=$(( RANDOM % 3 + 2 ))
+          echo "模拟人类行为，随机停顿 ${SLEEP_TIME} 秒..."
+          sleep $SLEEP_TIME
           
           # 访问登录页面获取数学验证码
           echo "访问登录页面获取数学验证码..."
-          LOGIN_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/login")
+          LOGIN_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
+            -H "Upgrade-Insecure-Requests: 1" \
+            -H "Referer: https://freecloud.ltd/" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            -H "Sec-Fetch-User: ?1" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/login")
           
-          # 使用grep提取数学验证码题目
-          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+\-*/] [0-9]\+ = ?"' | head -1)
+          # 保存登录页面内容以便调试
+          echo "保存登录页面内容以便调试..."
+          echo "$LOGIN_PAGE" | grep -i -A 3 -B 3 "captcha\|验证码\|math" > login_page_debug.txt
+          cat login_page_debug.txt
+          
+          # 使用正则表达式提取数学验证码题目
+          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+*/\-] [0-9]\+ = ?"' | head -1 || true)
           
           if [ -z "$MATH_QUESTION" ]; then
-            echo "未能找到数学验证码题目，尝试直接登录"
-            MATH_ANSWER=""
+            echo "未能找到数学验证码题目，尝试其他匹配模式..."
+            # 尝试其他匹配模式
+            MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]+ [+*/\-] [0-9]+ = ?"' || true)
+            
+            if [ -z "$MATH_QUESTION" ]; then
+              echo "仍未找到数学验证码题目，尝试直接登录"
+              MATH_ANSWER=""
+            else
+              echo "使用第二种模式找到验证码问题: $MATH_QUESTION"
+            fi
           else
             echo "找到验证码问题: $MATH_QUESTION"
-            
+          fi
+          
+          if [ -n "$MATH_QUESTION" ]; then
             # 提取数字和运算符
-            NUM1=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | head -1)
-            OP=$(echo "$MATH_QUESTION" | grep -o '[+\-*/]')
-            NUM2=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | tail -1)
+            NUM1=$(echo "$MATH_QUESTION" | grep -o -E '[0-9]+' | head -1)
+            OP=$(echo "$MATH_QUESTION" | grep -o -E '[+*/\-]')
+            NUM2=$(echo "$MATH_QUESTION" | grep -o -E '[0-9]+' | tail -1)
+            
+            echo "解析验证码: 第一个数字=$NUM1, 运算符=$OP, 第二个数字=$NUM2"
             
             # 计算答案
             if [ "$OP" = "+" ]; then
@@ -199,31 +258,57 @@ jobs:
           
           # 登录请求
           echo "尝试登录..."
-          sleep 2
           
-          LOGIN_RESULT=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" \
+          # 模拟人类行为：随机停顿
+          SLEEP_TIME=$(( RANDOM % 3 + 2 ))
+          echo "模拟人类行为，随机停顿 ${SLEEP_TIME} 秒..."
+          sleep $SLEEP_TIME
+          
+          # 准备登录数据
+          LOGIN_DATA=""
+          if [ -n "$CSRF_TOKEN" ]; then
+            LOGIN_DATA="_token=$CSRF_TOKEN&"
+          fi
+          LOGIN_DATA="${LOGIN_DATA}username=$FC_USERNAME&password=$FC_PASSWORD&math_captcha=$MATH_ANSWER&mobile=&captcha=&verify_code=&agree=1&login_type=PASS&submit=1"
+          
+          LOGIN_RESULT=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
             -X POST \
+            -H "User-Agent: $RANDOM_UA" \
             -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
             -H "Referer: https://freecloud.ltd/login" \
-            --data-urlencode "username=$FC_USERNAME" \
-            --data-urlencode "password=$FC_PASSWORD" \
-            --data-urlencode "math_captcha=$MATH_ANSWER" \
-            --data-urlencode "mobile=" \
-            --data-urlencode "captcha=" \
-            --data-urlencode "verify_code=" \
-            --data-urlencode "agree=1" \
-            --data-urlencode "login_type=PASS" \
-            --data-urlencode "submit=1" \
+            -H "Origin: https://freecloud.ltd" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            -H "Sec-Fetch-User: ?1" \
+            --data "$LOGIN_DATA" \
+            --compressed \
             --max-time 30 \
             "https://freecloud.ltd/login")
           
+          # 查看cookie文件
+          echo "Cookie文件内容:"
+          cat "$COOKIE_JAR" || echo "无法读取Cookie文件"
+          
+          # 检查登录是否成功 - 使用多种方法检查
+          echo "验证登录状态..."
           sleep 3
           
-          # 检查登录是否成功
-          echo "验证登录状态..."
-          CONSOLE_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/server/lxc")
+          # 方法1：直接请求服务器页面
+          CONSOLE_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8" \
+            -H "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8" \
+            -H "Referer: https://freecloud.ltd/login" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/server/lxc")
           
-          if echo "$CONSOLE_PAGE" | grep -q "logout\|退出登录"; then
+          # 检查是否存在成功登录的标志
+          if echo "$CONSOLE_PAGE" | grep -q "退出登录\|logout\|欢迎回来"; then
             echo "登录成功，检查服务器信息..."
             
             # 查找服务器信息
@@ -324,45 +409,100 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          echo "首次运行失败，等待30秒后重试..."
+          echo "首次运行失败，等待30秒后使用增强的curl配置重试..."
           sleep 30
           
-          # 重新随机一个User-Agent
-          USER_AGENTS=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
-          )
+          # 安装额外需要的工具
+          sudo apt-get update
+          sudo apt-get install -y curl jq
           
-          RANDOM_INDEX=$((RANDOM % ${#USER_AGENTS[@]}))
-          RANDOM_UA="${USER_AGENTS[$RANDOM_INDEX]}"
+          # 使用不同的User-Agent
+          RANDOM_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+          
+          # 增加额外的HTTP头以更像真实浏览器
+          ACCEPT_HEADER="text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+          ACCEPT_LANGUAGE="zh-CN,zh;q=0.9,en;q=0.8"
+          ACCEPT_ENCODING="gzip, deflate, br"
           
           # 创建一个包含所有cookie的临时文件
           COOKIE_JAR="cookies_retry.txt"
           
           # 首先访问首页获取初始cookie
-          echo "访问首页获取初始cookie..."
-          curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/"
-          sleep 3
+          echo "访问首页获取初始cookie和CSRF令牌..."
+          HOME_PAGE=$(curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
+            -H "Upgrade-Insecure-Requests: 1" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: none" \
+            -H "Sec-Fetch-User: ?1" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/")
+          
+          # 提取CSRF令牌
+          CSRF_TOKEN=$(echo "$HOME_PAGE" | grep -o 'name="_token" value="[^"]*"' | sed 's/name="_token" value="//g' | sed 's/"//g' || echo "")
+          if [ -n "$CSRF_TOKEN" ]; then
+            echo "找到CSRF令牌: ${CSRF_TOKEN:0:10}..."
+          else
+            echo "未找到CSRF令牌，继续尝试..."
+          fi
+          
+          # 模拟人类行为：随机停顿
+          SLEEP_TIME=$(( RANDOM % 3 + 2 ))
+          echo "模拟人类行为，随机停顿 ${SLEEP_TIME} 秒..."
+          sleep $SLEEP_TIME
           
           # 访问登录页面获取数学验证码
           echo "访问登录页面获取数学验证码..."
-          LOGIN_PAGE=$(curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/login")
+          LOGIN_PAGE=$(curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
+            -H "Upgrade-Insecure-Requests: 1" \
+            -H "Referer: https://freecloud.ltd/" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            -H "Sec-Fetch-User: ?1" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/login")
+          
+          # 保存登录页面内容以便调试
+          echo "保存登录页面内容以便调试..."
+          echo "$LOGIN_PAGE" | grep -i -A 3 -B 3 "captcha\|验证码\|math" > login_page_retry_debug.txt
+          cat login_page_retry_debug.txt
           
           # 使用正则表达式提取数学验证码题目
-          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+\-*/] [0-9]\+ = ?"' | head -1 || true)
+          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+*/\-] [0-9]\+ = ?"' | head -1 || true)
           
           if [ -z "$MATH_QUESTION" ]; then
-            echo "未能找到数学验证码题目，尝试直接登录"
-            MATH_ANSWER=""
+            echo "未能找到数学验证码题目，尝试其他匹配模式..."
+            # 尝试其他匹配模式
+            MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]+ [+*/\-] [0-9]+ = ?"' || true)
+            
+            if [ -z "$MATH_QUESTION" ]; then
+              echo "仍未找到数学验证码题目，尝试直接登录"
+              MATH_ANSWER=""
+            else
+              echo "使用第二种模式找到验证码问题: $MATH_QUESTION"
+            fi
           else
             echo "找到验证码问题: $MATH_QUESTION"
-            
+          fi
+          
+          if [ -n "$MATH_QUESTION" ]; then
             # 提取数字和运算符
-            NUM1=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | head -1)
-            OP=$(echo "$MATH_QUESTION" | grep -o '[+\-*/]')
-            NUM2=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | tail -1)
+            NUM1=$(echo "$MATH_QUESTION" | grep -o -E '[0-9]+' | head -1)
+            OP=$(echo "$MATH_QUESTION" | grep -o -E '[+*/\-]')
+            NUM2=$(echo "$MATH_QUESTION" | grep -o -E '[0-9]+' | tail -1)
+            
+            echo "解析验证码: 第一个数字=$NUM1, 运算符=$OP, 第二个数字=$NUM2"
             
             # 计算答案
             if [ "$OP" = "+" ]; then
@@ -380,25 +520,168 @@ jobs:
             echo "计算结果: $MATH_ANSWER"
           fi
           
-          # 登录请求
-          echo "尝试登录..."
+          # 模拟人类行为：随机停顿
+          SLEEP_TIME=$(( RANDOM % 3 + 2 ))
+          echo "模拟人类行为，随机停顿 ${SLEEP_TIME} 秒..."
+          sleep $SLEEP_TIME
+          
+          # 准备登录数据
+          LOGIN_DATA=""
+          if [ -n "$CSRF_TOKEN" ]; then
+            LOGIN_DATA="_token=$CSRF_TOKEN&"
+          fi
+          LOGIN_DATA="${LOGIN_DATA}username=$FC_USERNAME&password=$FC_PASSWORD&math_captcha=$MATH_ANSWER&mobile=&captcha=&verify_code=&agree=1&login_type=PASS&submit=1"
+          
+          echo "发送登录请求..."
+          LOGIN_RESULT=$(curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -X POST \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
+            -H "Referer: https://freecloud.ltd/login" \
+            -H "Origin: https://freecloud.ltd" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            -H "Sec-Fetch-User: ?1" \
+            --data "$LOGIN_DATA" \
+            --compressed \
+            --max-time 45 \
+            "https://freecloud.ltd/login")
+          
+          # 查看cookie文件
+          echo "Cookie文件内容:"
+          cat "$COOKIE_JAR" || echo "无法读取Cookie文件"
+          
+          # 检查登录是否成功 - 使用多种方法检查
+          echo "验证登录状态..."
           sleep 3
           
-          curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" \
-            -X POST \
-            -H "Content-Type: application/x-www-form-urlencoded" \
+          # 方法1：直接请求服务器页面
+          CONSOLE_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+            -H "User-Agent: $RANDOM_UA" \
+            -H "Accept: $ACCEPT_HEADER" \
+            -H "Accept-Language: $ACCEPT_LANGUAGE" \
+            -H "Accept-Encoding: $ACCEPT_ENCODING" \
+            -H "Connection: keep-alive" \
             -H "Referer: https://freecloud.ltd/login" \
-            --data-urlencode "username=$FC_USERNAME" \
-            --data-urlencode "password=$FC_PASSWORD" \
-            --data-urlencode "math_captcha=$MATH_ANSWER" \
-            --data-urlencode "mobile=" \
-            --data-urlencode "captcha=" \
-            --data-urlencode "verify_code=" \
-            --data-urlencode "agree=1" \
-            --data-urlencode "login_type=PASS" \
-            --data-urlencode "submit=1" \
-            --max-time 30 \
-            "https://freecloud.ltd/login"
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: same-origin" \
+            --compressed \
+            --max-time 30 "https://freecloud.ltd/server/lxc")
+          
+          # 检查是否存在成功登录的标志
+          if echo "$CONSOLE_PAGE" | grep -q "退出登录\|logout\|欢迎回来"; then
+            echo "登录成功，检查服务器信息..."
+            
+            # 查找服务器信息
+            MACHINE_ID="$FC_MACHINE_ID"
+            SERVER_INFO=$(echo "$CONSOLE_PAGE" | grep -A 50 -B 50 "$MACHINE_ID" | grep -o '[0-9]\+天后' || echo "")
+            
+            if [ -n "$SERVER_INFO" ]; then
+              DAYS_LEFT=$(echo "$SERVER_INFO" | grep -o '[0-9]\+')
+              echo "服务器 $MACHINE_ID 剩余 $DAYS_LEFT 天"
+              
+              # 判断是否需要续费
+              if [ "$DAYS_LEFT" -lt 3 ]; then
+                echo "剩余天数少于3天，需要续费"
+                
+                # 访问服务器详情页
+                echo "访问服务器详情页..."
+                SLEEP_TIME=$(( RANDOM % 2 + 1 ))
+                sleep $SLEEP_TIME
+                
+                curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+                  -H "User-Agent: $RANDOM_UA" \
+                  -H "Accept: $ACCEPT_HEADER" \
+                  -H "Accept-Language: $ACCEPT_LANGUAGE" \
+                  -H "Accept-Encoding: $ACCEPT_ENCODING" \
+                  -H "Connection: keep-alive" \
+                  -H "Referer: https://freecloud.ltd/server/lxc" \
+                  --compressed \
+                  --max-time 30 "https://freecloud.ltd/server/detail/$MACHINE_ID" > /dev/null
+                
+                # 执行续费操作
+                echo "执行续费操作..."
+                SLEEP_TIME=$(( RANDOM % 2 + 1 ))
+                sleep $SLEEP_TIME
+                
+                RENEW_RESULT=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+                  -X POST \
+                  -H "User-Agent: $RANDOM_UA" \
+                  -H "Content-Type: application/x-www-form-urlencoded" \
+                  -H "Accept: application/json, text/javascript, */*; q=0.01" \
+                  -H "Accept-Language: $ACCEPT_LANGUAGE" \
+                  -H "Accept-Encoding: $ACCEPT_ENCODING" \
+                  -H "X-Requested-With: XMLHttpRequest" \
+                  -H "Connection: keep-alive" \
+                  -H "Referer: https://freecloud.ltd/server/detail/$MACHINE_ID" \
+                  -H "Origin: https://freecloud.ltd" \
+                  --data-urlencode "month=1" \
+                  --data-urlencode "coupon_id=0" \
+                  --data-urlencode "submit=1" \
+                  --compressed \
+                  --max-time 45 \
+                  "https://freecloud.ltd/server/detail/$MACHINE_ID/renew")
+                  
+                echo "续费结果: $RENEW_RESULT"
+                
+                # 发送Telegram通知
+                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                  if echo "$RENEW_RESULT" | grep -q "success\|成功\|code\":0"; then
+                    MESSAGE="✅ 加强版curl: 服务器 $MACHINE_ID 续费成功！原剩余: $DAYS_LEFT 天。"
+                  else
+                    MESSAGE="❌ 加强版curl: 服务器 $MACHINE_ID 续费失败。原剩余: $DAYS_LEFT 天。"
+                  fi
+                  
+                  curl -s -X POST \
+                    -H "Content-Type: application/json" \
+                    --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                    "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+                fi
+              else
+                echo "剩余天数为 $DAYS_LEFT 天，无需续费"
+                
+                # 发送Telegram通知
+                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                  MESSAGE="ℹ️ 加强版curl: 服务器 $MACHINE_ID 剩余 $DAYS_LEFT 天，无需续费。"
+                  
+                  curl -s -X POST \
+                    -H "Content-Type: application/json" \
+                    --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                    "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+                fi
+              fi
+            else
+              echo "未能找到服务器 $MACHINE_ID 的剩余天数信息"
+              
+              # 发送Telegram通知
+              if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                MESSAGE="⚠️ 加强版curl: 未能找到服务器 $MACHINE_ID 的信息，无法续费。"
+                
+                curl -s -X POST \
+                  -H "Content-Type: application/json" \
+                  --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+              fi
+            fi
+          else
+            echo "重试登录也失败，无法获取服务器信息"
+            
+            # 发送Telegram通知
+            if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+              MESSAGE="🔴 加强版curl: 登录Freecloud失败，所有重试方法均已用尽。请手动检查网站状态。"
+              
+              curl -s -X POST \
+                -H "Content-Type: application/json" \
+                --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+            fi
+          fi
           
           # 清理临时文件
-          rm -f "$COOKIE_JAR" 
+          rm -f "$COOKIE_JAR" login_page_retry_debug.txt 
