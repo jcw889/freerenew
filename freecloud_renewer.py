@@ -217,7 +217,7 @@ def get_server_info(session, machine_id_to_find):
                 log_message(f"服务器 {machine_id_to_find} 剩余 {days_left} 天")
                 return {"remaining_days": days_left, "id_sn": machine_id_to_find}
             else:
-                log_message(f"未能在服务器 {machine_id_to_find} 附近找到"天后"信息")
+                log_message(f"未能在服务器 {machine_id_to_find} 附近找到\"天后\"信息")
                 return None
         else:
             log_message(f"页面中未找到服务器编号 {machine_id_to_find}")
