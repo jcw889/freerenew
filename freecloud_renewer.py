@@ -5,6 +5,7 @@ import re
 import json
 import time
 import traceback
+import random
 
 # ===================== Telegram 配置 (从环境变量读取) =====================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -56,14 +57,33 @@ BASE_URL = "https://freecloud.ltd"
 CONSOLE_URL = f"{BASE_URL}/server/lxc"  # 直接访问服务器列表页面
 # 续费URL会动态构建，因为 MACHINE_ID 是变量
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/122.0.0.0 Safari/537.36",
-    "Referer": f"{BASE_URL}/login",
-    "Origin": BASE_URL,
-    "Content-Type": "application/x-www-form-urlencoded"
-}
+# 常用浏览器 User-Agent 列表
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+]
+
+def get_headers():
+    """获取随机的请求头"""
+    user_agent = random.choice(USER_AGENTS)
+    return {
+        "User-Agent": user_agent,
+        "Referer": f"{BASE_URL}/",
+        "Origin": BASE_URL,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0"
+    }
 
 # ===================== Telegram 通知功能 =====================
 def send_telegram_message(message, is_error=False):
@@ -132,21 +152,158 @@ def login_session():
     模拟登录到 Freecloud，返回一个带有登录会话的 cloudscraper 实例。
     """
     log_message("尝试登录 Freecloud...")
-    scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False},
-    )
+    
+    # 尝试不同的浏览器配置
+    browser_configs = [
+        {"browser": "chrome", "platform": "windows", "mobile": False},
+        {"browser": "firefox", "platform": "windows", "mobile": False},
+        {"browser": "chrome", "platform": "darwin", "mobile": False},
+        {"browser": "firefox", "platform": "darwin", "mobile": False}
+    ]
+    
+    # 尝试不同的配置直到成功
+    for browser_config in browser_configs:
+        try:
+            log_message(f"尝试使用浏览器配置: {browser_config}", is_debug=True)
+            scraper = cloudscraper.create_scraper(
+                browser=browser_config,
+                delay=5,  # 增加延迟
+                interpreter='js2py'  # 使用js2py解释器
+            )
+            
+            # 设置scraper的默认头信息
+            scraper.headers.update(get_headers())
+            
+            # 首先访问首页以获取必要的cookie
+            log_message("访问首页获取初始cookie...")
+            home_resp = scraper.get(BASE_URL, timeout=30)
+            if home_resp.status_code != 200:
+                log_message(f"首页访问失败，状态码: {home_resp.status_code}", is_debug=True)
+                continue
+                
+            log_message("成功访问首页，等待几秒后继续...")
+            time.sleep(3)  # 模拟人类行为的延迟
+            
+            # 访问登录页面获取数学验证码
+            log_message("访问登录页面获取数学验证码...")
+            login_page_resp = scraper.get(f"{BASE_URL}/login", timeout=30)
+            if login_page_resp.status_code != 200:
+                log_message(f"登录页面访问失败，状态码: {login_page_resp.status_code}", is_debug=True)
+                continue
+            
+            # 解析数学验证码
+            math_solution = get_math_captcha_solution(login_page_resp.text)
+            if math_solution is None:
+                log_message("❌ 无法解析数学验证码，登录可能会失败")
+                send_telegram_message("⚠️ 无法解析数学验证码，登录可能会失败", is_error=True)
+            
+            # 准备登录数据
+            login_data = {
+                "username": FC_USERNAME,
+                "password": FC_PASSWORD,
+                "math_captcha": str(math_solution) if math_solution is not None else "",
+                "mobile": "",
+                "captcha": "",
+                "verify_code": "",
+                "agree": "1",
+                "login_type": "PASS",
+                "submit": "1"
+            }
+            
+            log_message("准备登录数据完成，包含数学验证码解答")
+            
+            # 随机延迟，模拟人类行为
+            delay = random.uniform(2, 5)
+            log_message(f"模拟人类行为，延迟 {delay:.2f} 秒后提交登录...", is_debug=True)
+            time.sleep(delay)
+            
+            # 发送登录请求
+            log_message(f"发送登录请求到: {BASE_URL}/login", is_debug=True)
+            # 确保设置了正确的内容类型
+            login_headers = scraper.headers.copy()
+            login_headers.update({
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": f"{BASE_URL}/login"
+            })
+            
+            response = scraper.post(
+                f"{BASE_URL}/login", 
+                data=login_data, 
+                headers=login_headers, 
+                allow_redirects=True, 
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                log_message(f"登录请求失败，状态码: {response.status_code}", is_debug=True)
+                continue
+                
+            log_message(f"登录请求响应状态码: {response.status_code}", is_debug=True)
+            log_message(f"登录请求响应URL: {response.url}", is_debug=True)
 
+            # 随机延迟，模拟人类行为
+            time.sleep(random.uniform(2, 4))
+            
+            # 访问控制台页面以验证登录状态
+            log_message("访问控制台页面以验证登录状态...")
+            console_headers = scraper.headers.copy()
+            console_headers.update({"Referer": f"{BASE_URL}/login"})
+            
+            console_resp = scraper.get(
+                CONSOLE_URL, 
+                headers=console_headers, 
+                timeout=30
+            )
+            
+            if console_resp.status_code != 200:
+                log_message(f"控制台页面访问失败，状态码: {console_resp.status_code}", is_debug=True)
+                continue
+                
+            log_message(f"控制台页面响应状态码: {console_resp.status_code}", is_debug=True)
+
+            if FC_USERNAME and FC_USERNAME.lower() in console_resp.text.lower():
+                 log_message("登录成功，在控制台页面找到用户名。")
+                 return scraper
+            elif "logout" in console_resp.text.lower() or "退出登录" in console_resp.text:
+                log_message("登录似乎成功（页面包含退出链接）。")
+                return scraper
+            else:
+                # 检查是否登录失败，可能是验证码错误
+                if "验证码" in console_resp.text or "重新登录" in console_resp.text:
+                    log_message("❌ 登录失败，可能是数学验证码计算错误")
+                    # 继续尝试下一个浏览器配置
+                    continue
+                    
+                log_message("警告：登录请求已发送，但无法100%确认登录成功（未在控制台页面找到明确标识）。脚本将继续尝试。")
+                log_message(f"控制台页面部分内容 (前500字符): {console_resp.text[:500]}", is_debug=True)
+                # 尽管无法确认，但还是返回会话
+                return scraper
+                
+        except requests.exceptions.HTTPError as he:
+            log_message(f"HTTP错误 (配置: {browser_config}): {he}")
+            # 继续尝试下一个配置
+        except requests.exceptions.RequestException as re:
+            log_message(f"请求错误 (配置: {browser_config}): {re}")
+            # 继续尝试下一个配置
+        except Exception as e:
+            log_message(f"未知错误 (配置: {browser_config}): {e}")
+            # 继续尝试下一个配置
+    
+    # 如果所有配置都失败，尝试直接使用requests
+    log_message("所有cloudscraper配置都失败，尝试使用标准requests...")
     try:
-        # 首先访问登录页面获取数学验证码
-        log_message("访问登录页面获取数学验证码...")
-        login_page_resp = scraper.get(f"{BASE_URL}/login", headers=HEADERS, timeout=30)
-        login_page_resp.raise_for_status()
+        session = requests.Session()
+        session.headers.update(get_headers())
+        
+        # 访问首页获取cookie
+        session.get(BASE_URL, timeout=30)
+        time.sleep(2)
+        
+        # 访问登录页面
+        login_page = session.get(f"{BASE_URL}/login", timeout=30)
         
         # 解析数学验证码
-        math_solution = get_math_captcha_solution(login_page_resp.text)
-        if math_solution is None:
-            log_message("❌ 无法解析数学验证码，登录可能会失败")
-            send_telegram_message("⚠️ 无法解析数学验证码，登录可能会失败", is_error=True)
+        math_solution = get_math_captcha_solution(login_page.text)
         
         # 准备登录数据
         login_data = {
@@ -161,41 +318,26 @@ def login_session():
             "submit": "1"
         }
         
-        log_message("准备登录数据完成，包含数学验证码解答")
-        
         # 发送登录请求
-        log_message(f"发送登录请求到: {BASE_URL}/login", is_debug=True)
-        response = scraper.post(f"{BASE_URL}/login", data=login_data, headers=HEADERS, allow_redirects=True, timeout=30)
-        response.raise_for_status()
-        log_message(f"登录请求响应状态码: {response.status_code}", is_debug=True)
-        log_message(f"登录请求响应URL: {response.url}", is_debug=True)
-
-        log_message("访问控制台页面以验证登录状态...")
-        console_resp = scraper.get(CONSOLE_URL, headers={**HEADERS, "Referer": f"{BASE_URL}/login"}, timeout=30)
-        console_resp.raise_for_status()
-        log_message(f"控制台页面响应状态码: {console_resp.status_code}", is_debug=True)
-
-        if FC_USERNAME and FC_USERNAME.lower() in console_resp.text.lower():
-             log_message("登录成功，在控制台页面找到用户名。")
-        elif "logout" in console_resp.text.lower() or "退出登录" in console_resp.text:
-            log_message("登录似乎成功（页面包含退出链接）。")
-        else:
-            # 检查是否登录失败，可能是验证码错误
-            if "验证码" in console_resp.text or "重新登录" in console_resp.text:
-                log_message("❌ 登录失败，可能是数学验证码计算错误")
-                send_telegram_message("❌ 登录失败，可能是数学验证码计算错误", is_error=True)
-                return None
-                
-            log_message("警告：登录请求已发送，但无法100%确认登录成功（未在控制台页面找到明确标识）。脚本将继续尝试。")
-            log_message(f"控制台页面部分内容 (前500字符): {console_resp.text[:500]}", is_debug=True)
-
-        return scraper
-    except requests.exceptions.RequestException as e:
-        log_message(f"登录 Freecloud 失败 (网络请求错误): {e}")
-        raise
+        session.post(
+            f"{BASE_URL}/login", 
+            data=login_data, 
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": f"{BASE_URL}/login"}, 
+            timeout=30
+        )
+        
+        # 验证登录状态
+        console_page = session.get(CONSOLE_URL, timeout=30)
+        if "logout" in console_page.text.lower() or "退出登录" in console_page.text:
+            log_message("使用标准requests登录成功")
+            return session
+            
+        log_message("使用标准requests登录可能失败")
     except Exception as e:
-        log_message(f"登录 Freecloud 时发生未知错误: {e}")
-        raise
+        log_message(f"使用标准requests时出错: {e}")
+    
+    # 如果都失败了，抛出异常
+    raise Exception("所有登录尝试均失败")
 
 def get_server_info(session, machine_id_to_find):
     """
@@ -203,7 +345,7 @@ def get_server_info(session, machine_id_to_find):
     """
     log_message(f"尝试从 {CONSOLE_URL} 获取服务器 {machine_id_to_find} 的信息...")
     try:
-        response = session.get(CONSOLE_URL, headers=HEADERS, timeout=30)
+        response = session.get(CONSOLE_URL, headers=get_headers(), timeout=30)
         response.raise_for_status()
         html = response.text
 
@@ -238,7 +380,21 @@ def renew_server_instance(session, server_id_sn):
         "coupon_id": "0" # 通常优惠券ID为0表示不使用或无效优惠券
     }
     try:
-        renew_headers = {**HEADERS, "Referer": f"{BASE_URL}/server/detail/{server_id_sn}"}
+        # 先访问详情页以获取必要的cookie和token
+        detail_url = f"{BASE_URL}/server/detail/{server_id_sn}"
+        log_message(f"先访问详情页: {detail_url}")
+        session.get(detail_url, headers=get_headers(), timeout=30)
+        
+        # 等待一下再续费
+        time.sleep(random.uniform(2, 4))
+        
+        renew_headers = get_headers()
+        renew_headers.update({
+            "Content-Type": "application/x-www-form-urlencoded", 
+            "Referer": detail_url,
+            "X-Requested-With": "XMLHttpRequest"
+        })
+        
         response = session.post(renew_url, data=current_renew_payload, headers=renew_headers, timeout=45)
         response.raise_for_status()
         try:
