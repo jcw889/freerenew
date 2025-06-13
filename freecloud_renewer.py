@@ -114,10 +114,24 @@ def get_math_captcha_solution(page_content):
     例如：从 "5 + 7 = ?" 提取并计算出 12
     """
     try:
-        # 使用正则表达式匹配类似 "5 + 7 = ?" 的验证码
+        # 使用更精确的正则表达式匹配类似 "5 + 7 = ?" 的验证码
         match = re.search(r'placeholder="([0-9]+)\s*([+\-*/])\s*([0-9]+)\s*=\s*\?"', page_content)
+        
+        # 如果第一个正则表达式匹配失败，尝试其他可能的格式
         if not match:
-            log_message("⚠️ 未在页面中找到数学验证码")
+            # 尝试另一种可能的格式
+            match = re.search(r'placeholder=["\']([0-9]+)\s*([+*/\-])\s*([0-9]+)\s*=\s*\?["\']', page_content)
+        
+        if not match:
+            log_message("⚠️ 未在页面中找到数学验证码，保存页面内容进行调试")
+            if DEBUG_MODE:
+                # 保存页面内容以便调试
+                with open("login_page_debug.txt", "w", encoding="utf-8") as f:
+                    # 截取验证码相关部分
+                    captcha_content = re.search(r'.{0,200}captcha.{0,200}', page_content)
+                    if captcha_content:
+                        f.write(f"验证码上下文: {captcha_content.group(0)}\n\n")
+                    f.write(page_content[:2000])  # 只保存前面部分
             return None
         
         num1 = int(match.group(1))
@@ -144,6 +158,8 @@ def get_math_captcha_solution(page_content):
         return result
     except Exception as e:
         log_message(f"解析数学验证码时出错: {e}")
+        if DEBUG_MODE:
+            log_message(traceback.format_exc())
         return None
 
 # ===================== Freecloud 操作 =====================
