@@ -24,10 +24,38 @@ jobs:
           echo "当前工作目录: $(pwd)"
           echo "列出目录内容:"
           ls -la
+      
+      - name: 确保必要文件存在
+        run: |
+          if [ ! -f "requirements.txt" ]; then
+            echo "创建requirements.txt文件..."
+            echo "requests==2.31.0" > requirements.txt
+            echo "cloudscraper==1.2.71" >> requirements.txt
+            echo "requirements.txt文件已创建"
+          fi
+          
+          # 检查脚本文件是否存在
+          SCRIPT_PATH=$(find . -name "freecloud_renewer.py" -type f | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "错误: 找不到脚本文件 freecloud_renewer.py"
+            exit 1
+          else
+            echo "找到脚本: $SCRIPT_PATH"
+            # 检查脚本文件中的语法错误
+            python -m py_compile "$SCRIPT_PATH" || {
+              echo "脚本中存在语法错误，尝试修复..."
+              # 检查并修复特定的语法错误
+              sed -i 's/f"🆘 脚本执行过程中发生意外总错误: {e}\\n\\n```/f"🆘 脚本执行过程中发生意外总错误: {e}\\n\\n```\\n/g' "$SCRIPT_PATH"
+              sed -i 's/{error_details}\\n```"/{error_details}\\n```"/g' "$SCRIPT_PATH"
+              echo "尝试修复完成，再次检查语法..."
+              python -m py_compile "$SCRIPT_PATH"
+            }
+          fi
           
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
+          cat requirements.txt
           pip install -r requirements.txt
       
       - name: 环境检查
@@ -39,6 +67,73 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DEBUG_MODE: 'true'
         run: |
+          # 创建环境检查脚本（如果不存在）
+          if [ ! -f "check_env.py" ]; then
+            cat > check_env.py << 'EOL'
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import glob
+import platform
+
+print("==== 环境检查工具 ====")
+print(f"Python版本: {sys.version}")
+print(f"系统平台: {platform.platform()}")
+print(f"当前工作目录: {os.getcwd()}")
+
+print("\n==== 环境变量检查 ====")
+required_vars = [
+    "FC_USERNAME", 
+    "FC_PASSWORD", 
+    "FC_MACHINE_ID", 
+    "TELEGRAM_BOT_TOKEN", 
+    "TELEGRAM_CHAT_ID"
+]
+
+for var in required_vars:
+    value = os.getenv(var)
+    if value:
+        masked = value[:2] + "*" * (len(value) - 4) + value[-2:] if len(value) > 4 else "****"
+        print(f"{var}: {masked} [已设置]")
+    else:
+        print(f"{var}: [未设置]")
+
+print("\n==== 目录内容 ====")
+for item in sorted(os.listdir(".")):
+    if os.path.isdir(item):
+        print(f"📁 {item}/")
+    else:
+        print(f"📄 {item} ({os.path.getsize(item)} 字节)")
+
+print("\n==== 查找脚本文件 ====")
+script_paths = glob.glob("**/*freecloud*py", recursive=True)
+if script_paths:
+    print("找到以下脚本文件:")
+    for path in script_paths:
+        print(f"- {path} ({os.path.getsize(path)} 字节)")
+else:
+    print("未找到任何匹配 *freecloud*py 的脚本文件")
+
+print("\n==== 文件检查 ====")
+files_to_check = [
+    "freecloud_renewer.py",
+    "requirements.txt",
+    ".github/workflows/renew.yml"
+]
+
+for file_path in files_to_check:
+    if os.path.exists(file_path):
+        print(f"✅ {file_path} 存在 ({os.path.getsize(file_path)} 字节)")
+    else:
+        print(f"❌ {file_path} 不存在")
+
+print("\n==== 检查完成 ====")
+EOL
+            echo "环境检查脚本已创建"
+          fi
+          
           python check_env.py
           
       - name: 运行续费脚本
