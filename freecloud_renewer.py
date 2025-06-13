@@ -313,8 +313,7 @@ def main():
         log_message(f"脚本因配置错误终止: {ve}")
     except Exception as e:
         error_details = traceback.format_exc()
-        full_error_message = f"🆘 脚本执行过程中发生意外总错误: {e}\n\n```
-{error_details}\n```"
+        full_error_message = f"🆘 脚本执行过程中发生意外总错误: {e}\n\n```\n{error_details}\n```"
         log_message(full_error_message)
         send_telegram_message(full_error_message, is_error=True)
     finally:
