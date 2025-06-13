@@ -134,26 +134,188 @@ jobs:
           DEBUG_MODE: 'true'
         run: python check_env.py
           
-      - name: 运行续费脚本
+      - name: 使用curl直接访问网站续费
         env:
           FC_USERNAME: ${{ secrets.FC_USERNAME }}
           FC_PASSWORD: ${{ secrets.FC_PASSWORD }}
           FC_MACHINE_ID: ${{ secrets.FC_MACHINE_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DEBUG_MODE: 'true'
         run: |
-          # 查找脚本文件
-          SCRIPT_PATH=$(find . -name "freecloud_renewer.py" -type f | head -n 1)
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "错误: 找不到脚本文件 freecloud_renewer.py"
-            exit 1
+          echo "尝试使用curl直接访问网站..."
+          
+          # 创建随机User-Agent
+          USER_AGENTS=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+          )
+          
+          RANDOM_INDEX=$((RANDOM % ${#USER_AGENTS[@]}))
+          RANDOM_UA="${USER_AGENTS[$RANDOM_INDEX]}"
+          
+          # 创建一个包含所有cookie的临时文件
+          COOKIE_JAR="cookies.txt"
+          
+          # 首先访问首页获取初始cookie
+          echo "访问首页获取初始cookie..."
+          curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/" > /dev/null
+          sleep 2
+          
+          # 访问登录页面获取数学验证码
+          echo "访问登录页面获取数学验证码..."
+          LOGIN_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/login")
+          
+          # 使用grep提取数学验证码题目
+          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+\-*/] [0-9]\+ = ?"' | head -1)
+          
+          if [ -z "$MATH_QUESTION" ]; then
+            echo "未能找到数学验证码题目，尝试直接登录"
+            MATH_ANSWER=""
           else
-            echo "找到脚本: $SCRIPT_PATH"
-            python "$SCRIPT_PATH"
+            echo "找到验证码问题: $MATH_QUESTION"
+            
+            # 提取数字和运算符
+            NUM1=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | head -1)
+            OP=$(echo "$MATH_QUESTION" | grep -o '[+\-*/]')
+            NUM2=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | tail -1)
+            
+            # 计算答案
+            if [ "$OP" = "+" ]; then
+              MATH_ANSWER=$((NUM1 + NUM2))
+            elif [ "$OP" = "-" ]; then
+              MATH_ANSWER=$((NUM1 - NUM2))
+            elif [ "$OP" = "*" ]; then
+              MATH_ANSWER=$((NUM1 * NUM2))
+            elif [ "$OP" = "/" ]; then
+              MATH_ANSWER=$((NUM1 / NUM2))
+            else
+              MATH_ANSWER=""
+            fi
+            
+            echo "计算结果: $MATH_ANSWER"
           fi
+          
+          # 登录请求
+          echo "尝试登录..."
+          sleep 2
+          
+          LOGIN_RESULT=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" \
+            -X POST \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "Referer: https://freecloud.ltd/login" \
+            --data-urlencode "username=$FC_USERNAME" \
+            --data-urlencode "password=$FC_PASSWORD" \
+            --data-urlencode "math_captcha=$MATH_ANSWER" \
+            --data-urlencode "mobile=" \
+            --data-urlencode "captcha=" \
+            --data-urlencode "verify_code=" \
+            --data-urlencode "agree=1" \
+            --data-urlencode "login_type=PASS" \
+            --data-urlencode "submit=1" \
+            --max-time 30 \
+            "https://freecloud.ltd/login")
+          
+          sleep 3
+          
+          # 检查登录是否成功
+          echo "验证登录状态..."
+          CONSOLE_PAGE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/server/lxc")
+          
+          if echo "$CONSOLE_PAGE" | grep -q "logout\|退出登录"; then
+            echo "登录成功，检查服务器信息..."
+            
+            # 查找服务器信息
+            MACHINE_ID="$FC_MACHINE_ID"
+            SERVER_INFO=$(echo "$CONSOLE_PAGE" | grep -A 50 -B 50 "$MACHINE_ID" | grep -o '[0-9]\+天后')
+            
+            if [ -n "$SERVER_INFO" ]; then
+              DAYS_LEFT=$(echo "$SERVER_INFO" | grep -o '[0-9]\+')
+              echo "服务器 $MACHINE_ID 剩余 $DAYS_LEFT 天"
+              
+              # 判断是否需要续费
+              if [ "$DAYS_LEFT" -lt 3 ]; then
+                echo "剩余天数少于3天，需要续费"
+                
+                # 访问服务器详情页
+                echo "访问服务器详情页..."
+                sleep 2
+                curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/server/detail/$MACHINE_ID" > /dev/null
+                
+                # 执行续费操作
+                echo "执行续费操作..."
+                sleep 2
+                RENEW_RESULT=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" \
+                  -X POST \
+                  -H "Content-Type: application/x-www-form-urlencoded" \
+                  -H "X-Requested-With: XMLHttpRequest" \
+                  -H "Referer: https://freecloud.ltd/server/detail/$MACHINE_ID" \
+                  --data-urlencode "month=1" \
+                  --data-urlencode "coupon_id=0" \
+                  --data-urlencode "submit=1" \
+                  --max-time 45 \
+                  "https://freecloud.ltd/server/detail/$MACHINE_ID/renew")
+                  
+                echo "续费结果: $RENEW_RESULT"
+                
+                # 发送Telegram通知
+                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                  if echo "$RENEW_RESULT" | grep -q "success\|成功\|code\":0"; then
+                    MESSAGE="✅ 服务器 $MACHINE_ID 续费成功！原剩余: $DAYS_LEFT 天。"
+                  else
+                    MESSAGE="❌ 服务器 $MACHINE_ID 续费失败。原剩余: $DAYS_LEFT 天。"
+                  fi
+                  
+                  curl -s -X POST \
+                    -H "Content-Type: application/json" \
+                    --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                    "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+                fi
+              else
+                echo "剩余天数为 $DAYS_LEFT 天，无需续费"
+                
+                # 发送Telegram通知
+                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                  MESSAGE="ℹ️ 服务器 $MACHINE_ID 剩余 $DAYS_LEFT 天，无需续费。"
+                  
+                  curl -s -X POST \
+                    -H "Content-Type: application/json" \
+                    --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                    "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+                fi
+              fi
+            else
+              echo "未能找到服务器 $MACHINE_ID 的剩余天数信息"
+              
+              # 发送Telegram通知
+              if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                MESSAGE="⚠️ 未能找到服务器 $MACHINE_ID 的信息，无法续费。"
+                
+                curl -s -X POST \
+                  -H "Content-Type: application/json" \
+                  --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+              fi
+            fi
+          else
+            echo "登录失败，无法获取服务器信息"
+            
+            # 发送Telegram通知
+            if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+              MESSAGE="🔴 使用curl方式登录Freecloud失败，无法续费。"
+              
+              curl -s -X POST \
+                -H "Content-Type: application/json" \
+                --data "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$MESSAGE\",\"parse_mode\":\"Markdown\"}" \
+                "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage"
+            fi
+          fi
+          
+          # 清理临时文件
+          rm -f "$COOKIE_JAR"
         
-      - name: 如果失败则重试 (可能是验证码问题)
+      - name: 如果失败重试一次
         if: failure()
         env:
           FC_USERNAME: ${{ secrets.FC_USERNAME }}
@@ -161,16 +323,82 @@ jobs:
           FC_MACHINE_ID: ${{ secrets.FC_MACHINE_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DEBUG_MODE: 'true'
         run: |
           echo "首次运行失败，等待30秒后重试..."
           sleep 30
-          # 查找脚本文件
-          SCRIPT_PATH=$(find . -name "freecloud_renewer.py" -type f | head -n 1)
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "错误: 找不到脚本文件 freecloud_renewer.py"
-            exit 1
+          
+          # 重新随机一个User-Agent
+          USER_AGENTS=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+          )
+          
+          RANDOM_INDEX=$((RANDOM % ${#USER_AGENTS[@]}))
+          RANDOM_UA="${USER_AGENTS[$RANDOM_INDEX]}"
+          
+          # 创建一个包含所有cookie的临时文件
+          COOKIE_JAR="cookies_retry.txt"
+          
+          # 首先访问首页获取初始cookie
+          echo "访问首页获取初始cookie..."
+          curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/"
+          sleep 3
+          
+          # 访问登录页面获取数学验证码
+          echo "访问登录页面获取数学验证码..."
+          LOGIN_PAGE=$(curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" --max-time 30 "https://freecloud.ltd/login")
+          
+          # 使用正则表达式提取数学验证码题目
+          MATH_QUESTION=$(echo "$LOGIN_PAGE" | grep -o 'placeholder="[0-9]\+ [+\-*/] [0-9]\+ = ?"' | head -1 || true)
+          
+          if [ -z "$MATH_QUESTION" ]; then
+            echo "未能找到数学验证码题目，尝试直接登录"
+            MATH_ANSWER=""
           else
-            echo "找到脚本: $SCRIPT_PATH"
-            python "$SCRIPT_PATH"
-          fi 
+            echo "找到验证码问题: $MATH_QUESTION"
+            
+            # 提取数字和运算符
+            NUM1=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | head -1)
+            OP=$(echo "$MATH_QUESTION" | grep -o '[+\-*/]')
+            NUM2=$(echo "$MATH_QUESTION" | grep -o '[0-9]\+' | tail -1)
+            
+            # 计算答案
+            if [ "$OP" = "+" ]; then
+              MATH_ANSWER=$((NUM1 + NUM2))
+            elif [ "$OP" = "-" ]; then
+              MATH_ANSWER=$((NUM1 - NUM2))
+            elif [ "$OP" = "*" ]; then
+              MATH_ANSWER=$((NUM1 * NUM2))
+            elif [ "$OP" = "/" ]; then
+              MATH_ANSWER=$((NUM1 / NUM2))
+            else
+              MATH_ANSWER=""
+            fi
+            
+            echo "计算结果: $MATH_ANSWER"
+          fi
+          
+          # 登录请求
+          echo "尝试登录..."
+          sleep 3
+          
+          curl -v -c "$COOKIE_JAR" -b "$COOKIE_JAR" -A "$RANDOM_UA" \
+            -X POST \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "Referer: https://freecloud.ltd/login" \
+            --data-urlencode "username=$FC_USERNAME" \
+            --data-urlencode "password=$FC_PASSWORD" \
+            --data-urlencode "math_captcha=$MATH_ANSWER" \
+            --data-urlencode "mobile=" \
+            --data-urlencode "captcha=" \
+            --data-urlencode "verify_code=" \
+            --data-urlencode "agree=1" \
+            --data-urlencode "login_type=PASS" \
+            --data-urlencode "submit=1" \
+            --max-time 30 \
+            "https://freecloud.ltd/login"
+          
+          # 清理临时文件
+          rm -f "$COOKIE_JAR" 
