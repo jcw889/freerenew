@@ -19,10 +19,27 @@ jobs:
         with:
           python-version: '3.10'
           
+      - name: 列出工作目录内容
+        run: |
+          echo "当前工作目录: $(pwd)"
+          echo "列出目录内容:"
+          ls -la
+          
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      
+      - name: 环境检查
+        env:
+          FC_USERNAME: ${{ secrets.FC_USERNAME }}
+          FC_PASSWORD: ${{ secrets.FC_PASSWORD }}
+          FC_MACHINE_ID: ${{ secrets.FC_MACHINE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DEBUG_MODE: 'true'
+        run: |
+          python check_env.py
           
       - name: 运行续费脚本
         env:
@@ -32,7 +49,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DEBUG_MODE: 'true'
-        run: python freecloud_renewer.py
+        run: |
+          # 查找脚本文件
+          SCRIPT_PATH=$(find . -name "freecloud_renewer.py" -type f | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "错误: 找不到脚本文件 freecloud_renewer.py"
+            exit 1
+          else
+            echo "找到脚本: $SCRIPT_PATH"
+            python "$SCRIPT_PATH"
+          fi
         
       - name: 如果失败则重试 (可能是验证码问题)
         if: failure()
@@ -46,4 +72,12 @@ jobs:
         run: |
           echo "首次运行失败，等待30秒后重试..."
           sleep 30
-          python freecloud_renewer.py 
+          # 查找脚本文件
+          SCRIPT_PATH=$(find . -name "freecloud_renewer.py" -type f | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "错误: 找不到脚本文件 freecloud_renewer.py"
+            exit 1
+          else
+            echo "找到脚本: $SCRIPT_PATH"
+            python "$SCRIPT_PATH"
+          fi 
