@@ -155,7 +155,7 @@ const sendTelegramMessage = async (message) => {
         // 保存页面截图和HTML以便调试
         await page.screenshot({ path: 'cloudflare_challenge.png' });
         const pageContent = await page.content();
-        console.log('页面内容:', pageContent.substring(0, 500) + '...');
+        console.log('页面内容片段:', pageContent.substring(0, 500) + '...');
         
         console.log('尝试继续执行...');
       }
@@ -173,10 +173,8 @@ const sendTelegramMessage = async (message) => {
       } catch (retryError) {
         console.log('二次尝试后仍未找到登录表单:', retryError.message);
         
-        // 保存页面截图和HTML以便调试
+        // 保存页面截图以便调试
         await page.screenshot({ path: 'login_page_error.png' });
-        const html = await page.content();
-        console.log('页面HTML片段:', html.substring(0, 500) + '...');
         
         // 发送Telegram通知
         await sendTelegramMessage('❌ 浏览器自动化失败: 无法访问登录页面或找不到登录表单');
@@ -261,7 +259,7 @@ const sendTelegramMessage = async (message) => {
     console.log('提交登录表单...');
     await randomDelay(1000, 2000);
     
-    // 点击登录按钮并等待导航完成
+    // 点击登录按钮
     try {
       await Promise.all([
         page.click('button[type="submit"]'),
@@ -279,8 +277,7 @@ const sendTelegramMessage = async (message) => {
     const isLoggedIn = await page.evaluate(() => {
       return document.body.textContent.includes('退出登录') || 
              document.body.textContent.includes('logout') || 
-             document.body.textContent.includes('欢迎回来') ||
-             document.body.textContent.includes('welcome back');
+             document.body.textContent.includes('欢迎回来');
     });
     
     if (isLoggedIn) {
@@ -333,7 +330,7 @@ const sendTelegramMessage = async (message) => {
           
           // 查找并点击续费按钮
           console.log('查找续费按钮...');
-          const renewButtonSelector = await page.evaluate(() => {
+          const renewButton = await page.evaluateHandle(() => {
             // 查找包含"续费"文本的按钮
             const buttons = Array.from(document.querySelectorAll('button'));
             const renewButton = buttons.find(btn => 
@@ -341,18 +338,12 @@ const sendTelegramMessage = async (message) => {
               btn.textContent.includes('renew')
             );
             
-            if (renewButton) {
-              // 如果找到按钮，返回一个可以唯一标识它的选择器
-              return renewButton.id ? `#${renewButton.id}` : 
-                     renewButton.className ? `.${renewButton.className.split(' ').join('.')}` : 
-                     `button:nth-of-type(${Array.from(document.querySelectorAll('button')).indexOf(renewButton) + 1})`;
-            }
-            return null;
+            return renewButton || null;
           });
           
-          if (renewButtonSelector) {
-            console.log(`找到续费按钮: ${renewButtonSelector}`);
-            await page.click(renewButtonSelector);
+          if (renewButton) {
+            console.log('找到续费按钮，点击...');
+            await renewButton.click();
             
             // 等待续费对话框出现
             try {
@@ -381,7 +372,7 @@ const sendTelegramMessage = async (message) => {
             
             // 查找并点击确认按钮
             console.log('查找确认按钮...');
-            const confirmButtonSelector = await page.evaluate(() => {
+            const confirmButton = await page.evaluateHandle(() => {
               // 查找包含"确认"或"确定"文本的按钮
               const buttons = Array.from(document.querySelectorAll('button'));
               const confirmButton = buttons.find(btn => 
@@ -390,27 +381,13 @@ const sendTelegramMessage = async (message) => {
                 btn.textContent.includes('Confirm')
               );
               
-              if (confirmButton) {
-                return confirmButton.id ? `#${confirmButton.id}` : 
-                       confirmButton.className ? `.${confirmButton.className.split(' ').join('.')}` : 
-                       `button:nth-of-type(${Array.from(document.querySelectorAll('button')).indexOf(confirmButton) + 1})`;
-              }
-              return null;
+              return confirmButton || null;
             });
             
-            if (confirmButtonSelector) {
-              console.log(`找到确认按钮: ${confirmButtonSelector}`);
-              await page.click(confirmButtonSelector);
-              
-              // 等待续费操作完成
-              try {
-                await page.waitForResponse(
-                  response => response.url().includes('/renew') && response.status() === 200,
-                  { timeout: 10000 }
-                );
-              } catch (error) {
-                console.log('等待续费响应超时:', error.message);
-              }
+            if (confirmButton) {
+              console.log('找到确认按钮，点击...');
+              await confirmButton.click();
+              await page.waitForTimeout(5000);
               
               console.log('续费操作已提交');
               
@@ -424,7 +401,7 @@ const sendTelegramMessage = async (message) => {
                 console.log('续费成功！');
                 await sendTelegramMessage(`✅ 浏览器自动化: 服务器 ${FC_MACHINE_ID} 续费成功！原剩余: ${daysLeft} 天。`);
               } else {
-                console.log('可能续费失败或状态不明确');
+                console.log('可能续费失败');
                 await sendTelegramMessage(`⚠️ 浏览器自动化: 服务器 ${FC_MACHINE_ID} 续费操作已提交，但结果不确定。请手动检查。原剩余: ${daysLeft} 天。`);
               }
             } else {
