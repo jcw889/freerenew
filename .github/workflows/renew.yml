@@ -41,14 +41,34 @@ jobs:
             exit 1
           else
             echo "找到脚本: $SCRIPT_PATH"
+            
+            # 修复中文引号问题
+            echo "检查并修复脚本中的中文引号问题..."
+            sed -i 's/log_message(f"未能在服务器 {machine_id_to_find} 附近找到"天后"信息")/log_message(f"未能在服务器 {machine_id_to_find} 附近找到\\"天后\\"信息")/' "$SCRIPT_PATH"
+            
             # 检查脚本文件中的语法错误
             python -m py_compile "$SCRIPT_PATH" || {
               echo "脚本中存在语法错误，尝试修复..."
               # 检查并修复特定的语法错误
               sed -i 's/f"🆘 脚本执行过程中发生意外总错误: {e}\\n\\n```/f"🆘 脚本执行过程中发生意外总错误: {e}\\n\\n```\\n/g' "$SCRIPT_PATH"
               sed -i 's/{error_details}\\n```"/{error_details}\\n```"/g' "$SCRIPT_PATH"
+              
+              # 通用修复：将f-string中的中文引号替换为转义的英文引号
+              echo "尝试修复所有f-string中的中文引号..."
+              grep -n 'f".*".*"' "$SCRIPT_PATH" || true
+              sed -i 's/\(f"[^"]*\)"$$$$\([^"]*\)"\([^"]*"\)/\1\\"$$$$\2\\"\3/g' "$SCRIPT_PATH"
+              
               echo "尝试修复完成，再次检查语法..."
-              python -m py_compile "$SCRIPT_PATH"
+              python -m py_compile "$SCRIPT_PATH" || {
+                echo "仍然存在语法错误，尝试手动更新脚本中问题行..."
+                # 如果编译仍然失败，创建一个临时副本进行更多调试
+                cp "$SCRIPT_PATH" "${SCRIPT_PATH}.bak"
+                echo "#!/usr/bin/env python3" > "$SCRIPT_PATH"
+                echo "print('检测到脚本语法错误，无法自动修复。请查看日志并手动修复问题。')" >> "$SCRIPT_PATH"
+                echo "exit(1)" >> "$SCRIPT_PATH"
+                echo "严重错误: 无法修复脚本中的语法问题，已创建简化版本以防止完全失败。"
+                echo "请手动检查和修复原始脚本: ${SCRIPT_PATH}.bak"
+              }
             }
           fi
           
